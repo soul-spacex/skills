@@ -30,13 +30,15 @@ ssx whoami
 
 ```bash
 ssx workflow create "项目名"     # 建画布，自动绑定当前目录，后续命令不用再传 id
-ssx model list                   # 看有哪些模型可用（带计价）
+ssx model list                   # 看有哪些模型可用（带 id 和计价）
 ssx schema                       # 看节点有哪些字段可以设
 
-ssx node create "剧本" -t textNode --prompt "用户的原话" --set llmModelId=<id> --run
-ssx node create "主视觉" -t imageNode --left 剧本 --set imageModelId=<id> --run
+ssx node create "剧本" -t textNode --prompt "用户的原话" --model "模型名" --run
+ssx node create "主视觉" -t imageNode --left 剧本 --model "MJ8.2" --run
 ssx node list                    # 看状态
 ```
+
+**选模型用 `--model "名字"`，不要自己填 `--set imageModelId=<数字>`。** 名字会按节点类型解析成对应的 id 并在输出里回显 `model: {id, name}`——你能确认生效的到底是哪个模型。名字写一半也认（`--model Seedance`），命中多个会把候选列给你挑。填错类型（给图片节点一个视频模型）会当场报错，而不是静默存下一个不生效的字段。
 
 `--left` 接上游，值是上游节点的名字。文本上游会成为下游的提示词，图片上游会成为参考图或视频首帧。
 
@@ -50,8 +52,8 @@ ssx node list                    # 看状态
 
 ```bash
 # 第一步：只建不跑（不加 --run）
-ssx node create "分镜1" -t imageNode --left 剧本 --set imageModelId=4
-ssx node create "分镜2" -t imageNode --left 剧本 --set imageModelId=4
+ssx node create "分镜1" -t imageNode --left 剧本 --model "MJ8.2"
+ssx node create "分镜2" -t imageNode --left 剧本 --model "MJ8.2"
 ssx workflow show          # 把结构给用户看，附上画布链接
 
 # 用户确认后再逐个跑
@@ -59,10 +61,42 @@ ssx node run 分镜1
 ssx node run 分镜2
 ```
 
+## 看清画布上有什么，再决定连谁
+
+`ssx node list` 回的不只是状态，每个节点都带着产物 URL、生效的模型和入边：
+
+```json
+{ "id": "…", "type": "imageNode", "name": "参考图", "status": "completed",
+  "modelId": 4, "modelName": "MJ8.2", "resultKind": "image",
+  "url": "https://…/a.png", "inputs": ["剧本"] }
+```
+
+用户说「用画布上那张参考图」而没指名是哪个节点时，别猜：
+
+```bash
+ssx node list                              # 拿到每张图的 URL
+ssx download <url> -o /tmp/ref1.png        # 下下来自己看一眼
+ssx node update 主视觉 --left 参考图        # 确认是哪张之后再连
+```
+
+用户给的是本地图片时，先传上去再落成图片节点，它就和生成出来的图一样能连给下游：
+
+```bash
+ssx upload ./ref.png                           # 回 { assetId, url }
+ssx node create 参考图 --asset <assetId>        # 落成已出图的 imageNode
+ssx node update 主视觉 --left-add 参考图        # 连给下游
+```
+
+只把 URL 塞进某个节点的 `refImages` 也能当参考图，但画布上看不到这张图，也没法连给别的节点。用户想在画布上看到、复用这张图时用 `--asset`。已有的图片节点要换图：`ssx node update 参考图 --asset <assetId>`。
+
+`inputs` 是这个节点当前的入边（上游节点名）。改连线前先看它，才知道该 `--left`（覆盖成这些）还是 `--left-add`（只加一条）。
+
+**`modelId` 是当前设置，`modelName` 是上次生成时的快照。** 节点改过模型但还没重跑时两者会对不上，以 `modelId` 为准。
+
 ## 出错了先诊断，不要重建
 
 ```bash
-ssx node list      # 哪个节点失败了
+ssx node list      # 哪个节点失败了、用的哪个模型、产物在哪
 ssx workflow show  # 看它的连线和参数
 ```
 
@@ -71,7 +105,7 @@ ssx workflow show  # 看它的连线和参数
 | 现象 | 怎么办 |
 | --- | --- |
 | 字段名或类型不对（报错会指名道姓） | 按报错改，`ssx schema` 查正确字段名 |
-| 没选模型 | `ssx model list` 挑一个，`--set imageModelId=<id>` |
+| 没选模型 | `ssx model list` 挑一个，`--model "名字"` |
 | 积分不足 | 告诉用户去充值，不要重试 |
 | 上游没有产物 | 先把上游节点跑出来 |
 | 上游模型服务错误 | 可以重试一次，连续失败就换个模型 |
@@ -100,7 +134,8 @@ ssx space list                        # 有多个空间时才用，默认落个�
 这几条不遵守会直接失败或浪费用户的钱：
 
 - **不要自己写轮询循环。** `--run` 和 `ssx node run` 默认阻塞到出结果。你每轮询一次都是一次模型调用，token 是用户在付。要立刻返回才用 `--wait 0`。
-- **不要设置 `status` / `result` / `assetId` / `generationId`。** 这些由生成结果回写，你设了会被服务端拒。拼 `--set` 之前跑 `ssx schema` 看哪些字段能设。
+- **不要手填 `imageModelId` / `videoModelId` 这类数字 id。** 用 `--model "名字"`，让工具去查 id。手填的数字对不对你无从验证，错了也不会报错，只会让画布上跑的是另一个模型。
+- **不要设置 `status` / `result` / `assetId` / `generationId`。** 这些由生成结果回写，你设了会被服务端拒。拼 `--set` 之前跑 `ssx schema` 看哪些字段能设。本地图要落成节点产物用 `--asset`。
 - **不要替用户改写提示词。** 用户说什么就传什么，不要加"电影级光影、8K、超写实"这类词——服务端有自己的提示词处理，你加的词通常是负优化。
 - **不要把一个任务拆成多次生成。** 要九张图就 `--set count=9`，不是跑九次。
 - **结果走 stdout，进度走 stderr。** `ssx node list | jq` 是安全的。
