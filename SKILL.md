@@ -87,6 +87,8 @@ ssx node create 参考图 --asset <assetId>        # 落成已出图的 imageNod
 ssx node update 主视觉 --left-add 参考图        # 连给下游
 ```
 
+你自己生成或改过的图也一样走这条路，不要让用户手动把图拖进画布。连的是 SoulSpaceX 的 MCP 插件而不是 `ssx` 时，用 `create_upload_url` 拿上传地址，按它给的 curl 命令传，回来的 `data.id` 当 `asset_id`。
+
 只把 URL 塞进某个节点的 `refImages` 也能当参考图，但画布上看不到这张图，也没法连给别的节点。用户想在画布上看到、复用这张图时用 `--asset`。已有的图片节点要换图：`ssx node update 参考图 --asset <assetId>`。
 
 `inputs` 是这个节点当前的入边（上游节点名）。改连线前先看它，才知道该 `--left`（覆盖成这些）还是 `--left-add`（只加一条）。
